@@ -4,122 +4,137 @@
 
 This repository implements a **Multilingual (Hindi) Visual Question Answering system for visually impaired users**, built on the VizWiz dataset (images captured by blind users, containing real-world noise: blur, poor lighting, off-center framing).
 
-**Motivation (from Phase 2 proposal):** Most state-of-the-art VQA systems are optimized for English. Hindi is spoken by over 43% of the Indian population but is a low-resource language for VQA. Existing multilingual assistive VQA systems bridge this gap with an external machine-translation module bolted onto a decoupled vision/text pipeline, which introduces inference latency unsuitable for real-time assistance, and typically rely on frozen vision encoders that generalize poorly to noisy real-world images.
+**Why this exists (Phase 2 proposal):** State-of-the-art VQA is largely English-only. Hindi is spoken by 43%+ of the Indian population and is under-served. Existing multilingual assistive VQA systems bolt an external machine-translation module onto a decoupled vision/text pipeline — this adds inference latency that makes them unsuitable for real-time assistance, and their (usually frozen) vision encoders generalize poorly to the visual noise typical of images taken by blind users.
 
-**Problem being solved:** Build a VQA system that is multilingual (Hindi), robust to real-world visual noise, and capable of real-time inference on standard/constrained hardware — without a decoupled translation step.
+**Problem being solved:** Build a VQA system that is multilingual (Hindi), robust to real-world visual noise, and capable of real-time inference on constrained hardware, without a decoupled translation step.
+
+---
+
+## How to use this file
+
+This file has three tiers of information. Treat them differently:
+
+1. **Explicit Phase 2 requirements** — stated directly in the proposal. Non-negotiable scope; do not silently drop or substitute.
+2. **Existing Phase 1 behavior** — what was actually built and measured. Treat as ground truth about the current state of the repo, and as the baseline Phase 2 must be compared against.
+3. **Open engineering decisions** — things the source documents do *not* specify (model choice, hyperparameters, latency targets, repo layout, etc.). These are for you (or a human) to decide during implementation. **Do not treat any placeholder, prior conversation, or your own inference as an official requirement just because it sounds plausible.** If you pick a concrete VLM, QLoRA config, or similar, that is an implementation choice you're making — flag it as such, don't present it as something the project specifies.
+
+---
+
+## Explicit Phase 2 Requirements (from the proposal — authoritative, do not weaken)
+
+1. Transition from the Phase 1 **decoupled dual-encoder** architecture to a **unified, end-to-end Vision-Language Model**.
+2. Fine-tune using **4-bit quantized QLoRA**.
+3. Support **Hindi** VQA (not English-only).
+4. Produce an **inference latency comparison** against the Phase 1 decoupled baseline.
+5. Produce a **VRAM utilization comparison** against the Phase 1 baseline.
+6. Produce an **accuracy comparison** against the Phase 1 baseline.
+7. Assess and improve **robustness to noisy, real-world images** (blur, poor lighting, off-center framing) — this is a stated objective, not incidental.
+8. Fit fine-tuning within a **24GB VRAM** hardware target.
+9. Deliver a **reproducible codebase** and a **fine-tuned VLM weight file**.
+
+Every one of the above must show up somewhere in the eventual implementation and in the comparative analysis report. None of them may be quietly dropped in favor of "just get a model running."
+
+## Explicitly NOT specified — do not hardcode these as requirements
+
+The source documents do **not** name:
+- A specific base VLM (no "use model X" anywhere in the proposal).
+- QLoRA hyperparameters (rank, alpha, target modules, dropout, quantization library).
+- Learning rate, batch size, epochs, schedule, or any other training hyperparameter for Phase 2.
+- A numeric latency target (only "reduce vs. Phase 1," no threshold).
+- A concrete unified-architecture design (how vision/text/fusion should be structured).
+- Repository layout, coding conventions, or a testing framework.
+
+If an agent (human or AI) proposes any of the above during implementation, that's a **design decision being made now**, not a rediscovered requirement. Record such decisions as decisions (e.g. in a design doc or PR description) rather than folding them into this file as if the proposal specified them. This file should only be updated with a concrete choice once a human has actually decided it — see "Design and Solution" milestone below.
+
+---
 
 ## Current State — Phase 1 (Completed)
 
-Phase 1 built a **decoupled, dual-encoder baseline** and Hindi translation pipeline. This is the baseline Phase 2 must improve on (see Phase 2 Objectives). Do not assume Phase 1 code is production infrastructure — it was run as Kaggle notebooks with hardcoded Kaggle paths (`/kaggle/working/`, `/kaggle/input/...`) and manual checkpoint-existence checks used to skip recomputation. These paths are not portable and will need to be replaced/parameterized for any new environment.
+Phase 1 built a **decoupled, dual-encoder baseline** plus the Hindi dataset it will be evaluated against. This is not scaffolding to build on top of — it is the **baseline to be replaced and outperformed**. It exists as Kaggle notebooks with hardcoded Kaggle paths (`/kaggle/working/...`, `/kaggle/input/...`) and manual "does a checkpoint already exist" gating logic. This is not portable infrastructure; expect to reimplement, not import, when building Phase 2.
 
-### Phase 1 Pipeline Stages (as implemented)
+### Pipeline stages as implemented
 
-1. **Data merging & path verification** — Merges VizWiz `train.json`/`val.json` with image directories and an `eng_hi.json` word-level dictionary; injects `image_path`; performs a stratified split (by `answer_type`) of the validation set into `val`/`test` (50/50 split ratio used, seed 42); validates for empty questions and malformed answer objects.
-2. **Hindi translation pipeline** — Uses `facebook/nllb-200-distilled-600M` (`eng_Latn` → `hin_Deva`) to translate questions and all answers into Hindi, with a post-translation word-level dictionary substitution pass (`eng_hi.json`). Produces `question_hi` and `answers_hi` fields.
-3. **Model A (dual-encoder baseline)** — `openai/clip-vit-large-patch14` (vision) + `xlm-roberta-base` (text) + a custom `CrossAttentionFusion` module (text queries attend to image patch embeddings) + a 4-class classifier head (`yes/no`, `number`, `other`, `unanswerable`).
-   - Phase 4.1: trains only fusion + classifier heads (vision/text backbones frozen). AdamW, cosine schedule with warmup, LR 1e-4, batch 16, grad-accum 2, up to 20 epochs, early stopping patience 5.
-   - Phase 4.2: adds a GPT-2 (`gpt2`) generative head for free-form answers. Two-stage fine-tuning: (a) stabilization of classifier/generator heads with everything else frozen, (b) constrained full fine-tuning with differential learning rates (text encoder 5e-6, fusion 1e-5, classifier/generator 2e-5) and the **vision encoder kept frozen throughout** ("visual features are language agnostic" — stated rationale in code comments).
-   - Result: ~0.68 answer-type classification accuracy; VQA-style answer score (exact match, `min(1, matches/3)`) only ~0.21–0.23. During stabilization, generative head's real answer score was recorded as 0.0000, indicating the GPT-2 generation head performed very poorly.
-4. **Feature extraction** — Pre-extracts and caches CLIP CLS-token image features (`clip_features.pt`, dim 1024) for reuse in Model B.
-5. **Model B (bridge model)** — `google/mt5-small` with an image-feature projection (`img_proj`) that prepends the projected CLIP CLS feature as an extra input embedding token to the text input. Trained with a **class-balanced loss** (per-class inverse-frequency weighting + a balance penalty term) to counter severe class imbalance in the training data (`other` 66.9%, `unanswerable` 27.0%, `yes/no` 4.7%, `number` 1.5%). Saves two checkpoints: best-accuracy and best-balanced (lowest std of per-class accuracy).
-   - Result: Overall VQA answer score 0.3429 on test, more class-balanced than Model A but still low absolute accuracy (`number` class especially poor, ~0.13).
+1. **Data merging & path verification** — merges VizWiz `train.json`/`val.json` with image dirs and a word-level `eng_hi.json` dictionary; injects `image_path`; stratified-splits `val` into `val`/`test` (ratio 0.5, seed 42) by `answer_type`; validates for empty questions / malformed answers.
+2. **Hindi translation pipeline** — `facebook/nllb-200-distilled-600M` (`eng_Latn`→`hin_Deva`) translates questions and answers, followed by a word-level dictionary substitution pass. Produces `question_hi` / `answers_hi`.
+3. **Model A — dual-encoder baseline**: `openai/clip-vit-large-patch14` (vision) + `xlm-roberta-base` (text) + custom `CrossAttentionFusion` (text queries attend to image patches) + 4-class answer-type classifier (`yes/no`, `number`, `other`, `unanswerable`) + a later-added GPT-2 generative head.
+   - Two-stage fine-tune: heads-only, then constrained full fine-tune with differential LRs. **Vision encoder stays frozen throughout** (code comment: "visual features are language agnostic" — this assumption is exactly what the Phase 2 proposal identifies as a limitation to fix).
+   - Result: ~0.68 answer-type accuracy, but VQA-style exact-match answer score only ~0.21–0.23; the GPT-2 generative head's real answer score was measured at 0.0000 during stabilization — generation quality is effectively broken, not just weak.
+4. **Feature extraction** — caches CLIP CLS-token features (1024-dim) for reuse.
+5. **Model B — bridge model**: `google/mt5-small` with a projected CLIP CLS-feature prepended as an extra input embedding token. Trained with a class-balanced loss (inverse-frequency weights + a balance penalty) because `answer_type` is heavily skewed (`other` 66.9%, `unanswerable` 27.0%, `yes/no` 4.7%, `number` 1.5%).
+   - Result: overall VQA answer score 0.3429 on test — better balanced than Model A, still low in absolute terms (`number` ~0.13).
 
-### Known Phase 1 Limitations (Phase 2 should address these)
-- Decoupled dual-encoder architecture with separate vision/text backbones → inference latency.
-- Frozen vision encoder does not adapt to VizWiz-style visual noise (blur, poor lighting, off-center framing).
-- Reliance on Hindi translation as a distinct upstream step (dataset creation), not integrated end-to-end.
-- Generative answer quality is weak (near-zero real answer score for GPT-2 head; ~0.34 overall for mT5 bridge model).
-- Severe class imbalance in `answer_type` (`number` and `yes/no` are minority classes).
+### Known Phase 1 limitations (these are exactly what Phase 2's objectives target — keep the mapping explicit)
 
-## Phase 2 Objectives
+| Phase 1 limitation | Phase 2 objective addressing it |
+|---|---|
+| Decoupled vision + text pipeline → sequential latency | Unified end-to-end VLM |
+| Vision encoder frozen, doesn't adapt to VizWiz-style noise | Robustness-to-noise evaluation objective |
+| Hindi handled via a separate translation step (dataset creation, not inference-time) | Native multilingual (Hindi) VQA in the unified model |
+| GPT-2 generative head effectively non-functional; mT5 bridge only 0.34 answer score | Accuracy comparison is a required deliverable — Phase 2 must actually beat this, not just differ from it |
+| No QLoRA / parameter-efficient fine-tuning used | 4-bit QLoRA required in Phase 2 |
+| No VRAM/latency instrumentation in Phase 1 code | VRAM + latency comparison are required deliverables |
 
-**Project title (per proposal):** *QLoRA-Assisted Optimization of Unified VLMs for Low-Latency Hindi Assistive VQA*
+---
 
-Explicit objectives (from the Phase 2 proposal — authoritative for scope):
-1. Transition from the Phase 1 decoupled dual-encoder baseline to a **unified, end-to-end Vision-Language architecture**.
-2. Implement a **4-bit quantized QLoRA** fine-tuning strategy for the unified model.
-3. Evaluate and reduce **inference latency** versus the Phase 1 decoupled pipeline.
-4. Assess the unified model's ability to handle **multilingual (Hindi) queries** and **noisy, unstructured real-world images**.
+## Deliverables (explicit)
 
-### Expected Deliverables (explicit)
 - A fully fine-tuned multilingual VLM weight file for Hindi assistive VQA.
-- A comparative analysis report: inference latency, VRAM utilization, and accuracy, benchmarked **Phase 1 (decoupled) vs. Phase 2 (unified)**.
-- Documented methodology and a reproducible codebase for hardware-constrained (**24GB VRAM** target, per proposal) fine-tuning using QLoRA.
+- A comparative analysis report: latency, VRAM, and accuracy, **Phase 1 (decoupled) vs. Phase 2 (unified)**.
+- A documented, reproducible codebase for QLoRA fine-tuning under a 24GB VRAM constraint.
 
-### Dataset
-- **VizWiz Hin**: base English VizWiz dataset (VizWiz project, UT Austin, public) + Hindi question/answer translations produced by the team in Phase 1 (`main_dataset_hi.json` and related files from the Phase 1 pipeline).
-- Link: https://vizwiz.org/tasks-and-datasets/vqa/
+## Dataset
 
-## Requirements
+- **VizWiz Hin**: base English VizWiz (VizWiz project, UT Austin, public) + Hindi Q/A translations produced by the team in Phase 1.
+- https://vizwiz.org/tasks-and-datasets/vqa/
 
-### Functional
-- Replace the decoupled CLIP+XLM-R / CLIP+mT5 pipelines with a single unified Vision-Language Model handling image + Hindi text input end-to-end.
-- Fine-tune the unified VLM using 4-bit QLoRA.
-- Produce Hindi-language answers to visual questions from the VizWiz Hin dataset.
+---
 
-### Non-Functional
-- Reduce inference latency relative to the Phase 1 decoupled baseline (exact target latency is **not specified** in the source documents).
-- Fit within a **24GB VRAM** budget for fine-tuning (per proposal; note Phase 1 experiments were run on a 16GB T4, so infrastructure has changed).
-- Maintain/assess robustness to real-world image noise (blur, poor lighting, off-center framing) — this is an evaluation goal, not a specified technique.
+## Development Workflow: Design → Implement → Verify → Demonstrate
 
-### Not specified in source documents (do not assume)
-- Which base unified VLM to use (e.g., a specific open-source VLM family) — **not named** in the proposal.
-- QLoRA hyperparameters (rank, alpha, target modules, quantization details beyond "4-bit").
-- Specific latency targets/thresholds or benchmark methodology beyond "compare to Phase 1."
-- Repository/directory structure for Phase 2 code.
-- Specific coding conventions, linting rules, or style guides.
-- Automated testing requirements or CI setup.
-- Build/run commands or environment setup scripts for Phase 2 (Phase 1 was Kaggle-notebook-based; whether Phase 2 continues on Kaggle is unspecified).
+The course plan (governing this project's evaluation) structures the phase as **design, then implementation, then verification, then demonstration** — not "get a model training ASAP." This has direct implications for how an agent should work:
+
+- There is a **Design and Solution** milestone before implementation is expected to be complete. Architecture and approach decisions (e.g., which unified VLM, how QLoRA is applied) are meant to be deliberately chosen and documented, not defaulted to by an agent mid-task.
+- **Progress Review** evaluates code against the design, not just whether it runs — "Design to Code Mapping" is graded explicitly.
+- **Mid Review** and **Final Review** include result analysis and viva components that expect the implementer to justify design/implementation choices with technical reasoning, not just present output metrics.
+- **Report submission** requires low plagiarism (similarity index < 15%) and low AI-generated-content score (< 20%) per Turnitin, per faculty remarks — applies to written report deliverables.
+
+Practical implication for an agent: when asked to "implement Phase 2," don't jump straight to picking a model and training. Surface the open decisions (model choice, QLoRA config, evaluation harness for latency/VRAM/accuracy) as decisions to be made/confirmed first, consistent with the design-before-implementation expectation.
+
+---
 
 ## Technical Context
 
-### Confirmed from Phase 1 code (existing stack)
-- Python, PyTorch, Hugging Face `transformers`.
-- Vision: `openai/clip-vit-large-patch14` (`CLIPVisionModel`, `CLIPImageProcessor`).
-- Text encoders used: `xlm-roberta-base`, `google/mt5-small`.
-- Translation: `facebook/nllb-200-distilled-600M`.
-- Generative head: `gpt2` (`GPT2LMHeadModel`).
-- Data/eval tooling: `pandas`, `numpy`, `scikit-learn` (classification_report, confusion matrix), `matplotlib`, `tqdm`.
-- Training utilities: `torch.cuda.amp` (mixed precision), gradient accumulation, gradient clipping, cosine LR schedules with warmup.
+### Confirmed existing stack (Phase 1)
+Python, PyTorch, `transformers`; `openai/clip-vit-large-patch14`, `xlm-roberta-base`, `google/mt5-small`, `facebook/nllb-200-distilled-600M`, `gpt2`; `pandas`, `numpy`, `scikit-learn`, `matplotlib`, `tqdm`; `torch.cuda.amp`, gradient accumulation/clipping, cosine LR warmup schedules.
 
-### Confirmed from Phase 2 proposal (new stack element)
-- **QLoRA** (4-bit quantized low-rank adaptation) as the fine-tuning method for Phase 2. The specific QLoRA library/implementation is not specified — commonly `bitsandbytes` + `peft` are used for this technique, but this is **not stated in the source documents**, so verify/decide before assuming.
+### New for Phase 2 (per proposal, method only — not implementation details)
+**QLoRA** (4-bit quantized low-rank adaptation) is the required fine-tuning method. The specific library (e.g. `bitsandbytes`/`peft`) is not named in the source documents — verify/decide, don't assume.
 
-## Architecture
-
-- **Phase 1 (existing, do not modify unless explicitly reworking the baseline for comparison)**: Two separate models —
-  - Model A: CLIP-ViT-L/14 + XLM-RoBERTa-base + custom cross-attention fusion + classifier head + GPT-2 generative head.
-  - Model B: CLIP CLS-token features (pre-extracted, cached) + mT5-small with an image-feature-as-prefix-token bridge.
-  - These represent the "decoupled dual-encoder baseline" that Phase 2's comparative analysis report must benchmark against.
-- **Phase 2 (to be built)**: A single unified end-to-end Vision-Language architecture, fine-tuned with QLoRA. No further architectural detail is specified in the source documents — this is an open design decision for the implementation phase (course plan indicates a "Design and solution" deliverable/review exists for this purpose, see below).
-
-## Development Guidelines
-
-No explicit coding conventions, project structure, or style requirements are specified in any source document. Absent other instruction, use conventional Python project practices, but do not present any specific convention as a project requirement — none was found in the source material.
-
-## Testing & Verification
-
-No automated testing framework or requirements are specified. Verification in Phase 1 was done via:
-- Classification reports (`sklearn.metrics.classification_report`) and confusion matrices for answer-type classification.
-- A custom VizWiz-style "ANS score" for generated answers: `min(1, matches / 3)` where `matches` counts exact (case-insensitive) matches against up to 10 ground-truth answers per question.
-- Per-class score/accuracy breakdowns and "balance" metrics (std/spread across `answer_type` classes) to track the class-imbalance problem.
-
-For Phase 2, verification should include (per the proposal's deliverables): accuracy comparison, inference latency comparison, and VRAM utilization comparison against the Phase 1 baseline. No specific test harness or acceptance thresholds are given.
+---
 
 ## Constraints
 
-- **Do not silently drop the multilingual (Hindi) requirement** — it is a stated objective and a stated deliverable.
-- **Do not silently drop the noisy-image robustness evaluation** — the proposal explicitly frames frozen/decoupled vision encoders' inability to generalize to noise as a problem to address.
-- Target hardware: fine-tuning should fit a **24GB VRAM** budget (proposal's stated deliverable constraint).
-- QLoRA (4-bit) is an explicit required method for the fine-tuning strategy — do not substitute a different PEFT method without flagging the deviation.
-- The comparative analysis report must benchmark against the **Phase 1 decoupled baseline** specifically (Model A and/or Model B as implemented) — not an arbitrary external baseline.
-- Academic/documentation constraint (from both the course plan and the proposal's faculty remarks): submitted written deliverables (e.g., reports) must have **similarity index < 15%** and **AI-generated content score < 20%** as verified by Turnitin. This applies to written report deliverables, not necessarily to code, but source documents do not draw that distinction explicitly.
+- Do not drop the Hindi/multilingual requirement.
+- Do not drop the noisy-image robustness evaluation.
+- Fine-tuning must target a 24GB VRAM budget.
+- QLoRA (4-bit) is required for fine-tuning; substituting a different PEFT method is a deviation that must be flagged, not silently made.
+- The comparative report must benchmark against **Phase 1 Model A and/or Model B as actually implemented**, not a generic external baseline.
+- Written report deliverables: similarity index < 15%, AI-generated-content score < 20% (Turnitin).
+- Do not treat this file's "open engineering decisions" list, or any prior conversation about candidate models/hyperparameters, as project requirements. Only the "Explicit Phase 2 Requirements" section above is authoritative scope.
+
+## Testing & Verification
+
+No automated test framework or thresholds are specified. Phase 1 verification approach (reusable for Phase 2):
+- `sklearn.metrics.classification_report` + confusion matrices for answer-type classification.
+- VizWiz-style ANS score: `min(1, matches/3)` against up to 10 ground-truth answers, case-insensitive exact match.
+- Per-class score/accuracy and balance (std/spread) tracking, given the class imbalance in `answer_type`.
+
+Phase 2 additionally requires latency and VRAM measurement — no existing instrumentation for this exists in the Phase 1 code; it must be built.
 
 ## Important Notes
 
-- **Course plan (Document 3) is administrative, not a technical requirements source.** It specifies grading rubrics, review dates, and CO/PO mappings for course credit — it contains no functional, architectural, or technical requirements for the software itself. Relevant operationally-useful facts pulled from it: evaluation review windows (Progress review/code: 07–11 Sep 2026; Mid Review: 22–28 Sep 2026; Final Review: 12–16 Oct 2026; Project Report submission: 13 Nov 2026, per the version in this repo — treat these as the milestone calendar, not implementation deadlines with technical implications).
-- **The Phase 2 proposal (Document 4) is the authoritative source for technical/functional Phase 2 requirements.** The Phase 1 notebook (Document 2) is the authoritative source for what currently exists. Where the course plan and proposal overlap (e.g., both mention plagiarism/AI-content thresholds), they agree — no conflict was found between the three documents.
-- Source documents live under `docs/` in this repository — consult them directly for anything beyond what's summarized here:
-  - `docs/phase_1_implementation.pdf` — Phase 1 notebook (data pipeline, Model A, Model B, evaluation).
-  - `docs/phase_2_course_plan.pdf` — course/grading administrative plan.
-  - `docs/phase_2_proposal.pdf` — Phase 2 technical objectives, dataset, deliverables, literature survey.
+- The proposal (Phase 2 technical scope) and the course plan (grading/process) do not conflict; the course plan contributes the design→implement→verify→demo workflow requirement and the plagiarism/AI-content thresholds, nothing else technical.
+- Source documents live under `docs/`:
+  - `docs/phase_1_implementation.pdf`
+  - `docs/phase_2_course_plan.pdf`
+  - `docs/phase_2_proposal.pdf`
