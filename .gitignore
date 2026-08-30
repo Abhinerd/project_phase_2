@@ -1,0 +1,99 @@
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ==============================
+# Environment / Secrets
+# ==============================
+.env
+.env.*
+!.env.example
+
+# API keys / credentials
+*.pem
+*.key
+
+# ==============================
+# Jupyter
+# ==============================
+.ipynb_checkpoints/
+
+# ==============================
+# ML Models / Checkpoints
+# ==============================
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Hugging Face cache
+.cache/
+huggingface_cache/
+hf_cache/
+
+# ==============================
+# Training Outputs
+# ==============================
+outputs/
+checkpoints/
+runs/
+wandb/
+tensorboard/
+logs/
+
+# ==============================
+# Large datasets
+# ==============================
+data/raw/
+data/processed/
+datasets/
+
+# ==============================
+# Temporary files
+# ==============================
+*.tmp
+*.temp
+*.log
+
+# ==============================
+# OS
+# ==============================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# ==============================
+# IDEs / Editors
+# ==============================
+.vscode/
+.idea/
+
+# ==============================
+# Miscellaneous
+# ==============================
+*.swp
+*.swo
