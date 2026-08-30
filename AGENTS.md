@@ -135,6 +135,6 @@ Phase 2 additionally requires latency and VRAM measurement — no existing instr
 
 - The proposal (Phase 2 technical scope) and the course plan (grading/process) do not conflict; the course plan contributes the design→implement→verify→demo workflow requirement and the plagiarism/AI-content thresholds, nothing else technical.
 - Source documents live under `docs/`:
-  - `docs/phase_1_implementation.pdf`
-  - `docs/phase_2_course_plan.pdf`
-  - `docs/phase_2_proposal.pdf`
+  - `docs/phase_1/phase_1_implementation.pdf`
+  - `docs/phase_2/phase_2_course_plan.pdf`
+  - `docs/phase_2/phase_2_proposal.pdf`
