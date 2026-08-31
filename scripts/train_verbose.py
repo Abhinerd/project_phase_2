@@ -88,7 +88,7 @@ def main() -> None:
     else:
         # Load ALL available records if num-train-samples is set to -1 or 0
         train_records = prepare_records(args.dataset, args.cache_dir, None, "train")
-        args.num_train_samples  = float('inf')
+        args.num_train_samples  = len(train_records)
 
     print(f"[DATA] Reserving validation records (N={args.num_val_samples})...")
     all_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples + args.num_val_samples, "train_plus_val")
