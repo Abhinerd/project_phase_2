@@ -27,7 +27,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--num-train-epochs", type=int, default=1)
     parser.add_argument("--per-device-train-batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2)
-    parser.add_argument("--max-train-steps", type=int, default=10)
+    parser.add_argument("--max-train-steps", type=int, default=-1, help="Max steps to train. Set to -1 to train full epochs.")
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-vram-gib", type=float, default=16.0)
     parser.add_argument("--allow-missing-images", action="store_true")
@@ -82,7 +82,12 @@ def main() -> None:
 
     print_section("Data Preparation & Tokenization")
     print(f"[DATA] Loading train records (N={args.num_train_samples})...")
-    train_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples, "train")
+
+    if args.num_train_samples > 0:
+        train_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples, "train")
+    else:
+        # Load ALL available records if num-train-samples is set to -1 or 0
+        train_records = prepare_records(args.dataset, args.cache_dir, None, "train")
 
     print(f"[DATA] Reserving validation records (N={args.num_val_samples})...")
     all_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples + args.num_val_samples, "train_plus_val")
@@ -168,7 +173,8 @@ def main() -> None:
                 if step >= args.max_train_steps:
                     print(f"[TRAIN] Reached max requested steps ({args.max_train_steps}). Halting.")
                     break
-        if step >= args.max_train_steps:
+        if args.max_train_steps > 0 and step >= args.max_train_steps:
+            print(f"[TRAIN] Reached max requested steps ({args.max_train_steps}). Halting.")
             break
 
     print_section("Saving Artifacts & Metrics")
