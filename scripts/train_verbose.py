@@ -1,4 +1,4 @@
-"""Verbose end-to-end QLoRA smoke training for VizWiz-Hindi data with extended logging and checks."""
+"""Verbose end-to-end QLoRA/LoRA smoke training for VizWiz-Hindi data with extended logging and checks."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DEFAULT_MODEL = "llava-hf/llava-1.5-7b-hf"
+DEFAULT_MODEL = "HuggingFaceTB/SmolVLM-256M-Instruct"
 
 
 def arguments() -> argparse.Namespace:
@@ -31,6 +31,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-vram-gib", type=float, default=16.0)
     parser.add_argument("--allow-missing-images", action="store_true")
+    parser.add_argument("--use-4bit", action="store_true", help="Enable 4-bit quantization (Requires Compute Capability >= 7.0 like T4/A100).")
     parser.add_argument("--fp16", action="store_true", help="Prefer fp16 even where bf16 is available.")
     return parser.parse_args()
 
@@ -46,7 +47,7 @@ def move_to_model_device(batch, model):
 
 def main() -> None:
     args = arguments()
-    
+
     print_section("Pre-Flight Checks & Configuration")
     print(f"[CHECK] Python Version     : {sys.version.split()[0]}")
     print(f"[CHECK] Root Directory     : {ROOT}")
@@ -54,7 +55,7 @@ def main() -> None:
     print(f"[CHECK] Image Root Path    : {args.image_root} (Exists: {args.image_root.exists()})")
     print(f"[CHECK] Target Model ID    : {args.model_id}")
     print(f"[CHECK] Output Directory   : {args.output_dir}")
-    
+
     if not args.dataset.exists():
         raise FileNotFoundError(f"Dataset file not found at: {args.dataset}")
 
@@ -70,32 +71,37 @@ def main() -> None:
 
     started = time.perf_counter()
     if not torch.cuda.is_available():
-        raise RuntimeError("This 4-bit QLoRA verification pipeline requires a CUDA-capable GPU.")
-    
+        raise RuntimeError("This verification pipeline requires a CUDA-capable GPU.")
+
     gpu_name = torch.cuda.get_device_name(0)
     total_vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024**3)
     print(f"[CHECK] GPU Device Name    : {gpu_name}")
     print(f"[CHECK] GPU VRAM Total     : {total_vram_gib:.2f} GiB")
-    
+
     torch.cuda.reset_peak_memory_stats()
 
     print_section("Data Preparation & Tokenization")
     print(f"[DATA] Loading train records (N={args.num_train_samples})...")
     train_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples, "train")
-    
+
     print(f"[DATA] Reserving validation records (N={args.num_val_samples})...")
     all_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples + args.num_val_samples, "train_plus_val")
     val_records = all_records[args.num_train_samples :]
 
-    print_section("Loading Quantized Model (4-bit QLoRA)")
+    print_section("Loading Vision-Language Model")
     load_start = time.perf_counter()
     model, processor, compute_dtype = load_quantized_vlm(
-        QLoRASettings(model_id=args.model_id, use_bf16=not args.fp16), trainable=True
+        QLoRASettings(
+            model_id=args.model_id,
+            use_4bit=args.use_4bit,
+            use_bf16=not args.fp16,
+        ),
+        trainable=True,
     )
     print(f"[MODEL] Loaded in {time.perf_counter() - load_start:.2f}s")
     print(f"[MODEL] Compute Data Type : {compute_dtype}")
+    print(f"[MODEL] 4-Bit Quantized   : {args.use_4bit}")
 
-    # Parameter Stats
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     all_params = sum(p.numel() for p in model.parameters())
     print(f"[MODEL] Trainable Params  : {trainable_params:,} / {all_params:,} ({100 * trainable_params / all_params:.2f}%)")
@@ -113,7 +119,7 @@ def main() -> None:
     )
 
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
-    
+
     print_section("Training Loop Started")
     print(f"[TRAIN] Batch Size        : {args.per_device_train_batch_size}")
     print(f"[TRAIN] Grad Accum Steps  : {args.gradient_accumulation_steps}")
@@ -130,25 +136,25 @@ def main() -> None:
         print(f"--- Epoch {epoch + 1}/{args.num_train_epochs} ---")
         for batch_index, batch in enumerate(loader):
             batch = move_to_model_device(batch, model)
-            
+
             with torch.autocast("cuda", dtype=compute_dtype):
                 loss_out = model(**batch).loss
                 loss = loss_out / args.gradient_accumulation_steps
-            
+
             loss.backward()
 
             if (batch_index + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 step += 1
-                
+
                 step_loss = loss.item() * args.gradient_accumulation_steps
                 losses.append(step_loss)
-                
+
                 step_duration = time.perf_counter() - step_start_time
                 current_vram = torch.cuda.memory_allocated() / (1024**3)
                 peak_vram = torch.cuda.max_memory_allocated() / (1024**3)
-                
+
                 print(
                     f"[STEP {step:02d}/{args.max_train_steps}] "
                     f"Loss: {step_loss:.4f} | "
@@ -156,9 +162,9 @@ def main() -> None:
                     f"VRAM Allocated: {current_vram:.2f} GiB | "
                     f"VRAM Peak: {peak_vram:.2f} GiB"
                 )
-                
+
                 step_start_time = time.perf_counter()
-                
+
                 if step >= args.max_train_steps:
                     print(f"[TRAIN] Reached max requested steps ({args.max_train_steps}). Halting.")
                     break
@@ -167,7 +173,7 @@ def main() -> None:
 
     print_section("Saving Artifacts & Metrics")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"[SAVE] Saving adapter weights to: {args.output_dir}")
     model.save_pretrained(args.output_dir)
     processor.save_pretrained(args.output_dir)
@@ -189,6 +195,7 @@ def main() -> None:
         "vram_limit_gib": args.max_vram_gib,
         "vram_within_limit": peak_vram_gib <= args.max_vram_gib,
         "compute_dtype": str(compute_dtype),
+        "use_4bit": args.use_4bit,
         "missing_images_allowed": args.allow_missing_images,
     }
 
@@ -207,7 +214,7 @@ def main() -> None:
 
     if not metrics["vram_within_limit"]:
         raise RuntimeError(
-            f"Peak VRAM {peak_vram_gib:.3f} GiB exceeds the configured "
+            f"Peak VRAM {peak_vram_gib:.3f} GiB exceeds configured "
             f"{args.max_vram_gib:.3f} GiB safety limit."
         )
 
