@@ -1,0 +1,10 @@
+.\venv\Scripts\Activate.ps1
+
+
+https://vizwiz.org/tasks-and-datasets/vqa/  ->  download json files
+
+
+pip install argostranslate tqdm
+(python 3.11.9)
+python install_model.py
+python translate_vizwiz.py
