@@ -61,6 +61,10 @@ def load_quantized_vlm(
         if settings.use_4bit:
             model = prepare_model_for_kbit_training(model)
 
+        # Enable gradient checkpointing to drastically cut activation memory during backprop
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+
         target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
         
         peft_config = LoraConfig(
