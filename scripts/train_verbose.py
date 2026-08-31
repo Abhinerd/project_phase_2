@@ -51,7 +51,7 @@ def main() -> None:
     print(f"[CHECK] Python Version     : {sys.version.split()[0]}")
     print(f"[CHECK] Root Directory     : {ROOT}")
     print(f"[CHECK] Dataset Path       : {args.dataset} (Exists: {args.dataset.exists()})")
-    print(f"[CHECK] Image Root Path    : {args.image-root} (Exists: {args.image-root.exists()})")
+    print(f"[CHECK] Image Root Path    : {args.image_root} (Exists: {args.image_root.exists()})")
     print(f"[CHECK] Target Model ID    : {args.model_id}")
     print(f"[CHECK] Output Directory   : {args.output_dir}")
     
