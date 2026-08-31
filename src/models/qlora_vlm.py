@@ -23,7 +23,7 @@ def load_quantized_vlm(
     trainable: bool = True,
     adapter_path: Optional[Union[str, Path]] = None,
 ):
-    """Loads a vision-language model with optional 4-bit quantization, LoRA training setup, or pre-trained adapter weights."""
+    """Loads a vision-language model using AutoModelForImageTextToText."""
     processor = AutoProcessor.from_pretrained(
         adapter_path if adapter_path and Path(adapter_path).exists() else settings.model_id
     )
@@ -38,15 +38,17 @@ def load_quantized_vlm(
             bnb_4bit_compute_dtype=compute_dtype,
         )
 
-    # Base VLM backbone initialization
+    # Force single CUDA device mapping during training to avoid cross-device tensor errors
+    device_map = {"": 0} if trainable else "auto"
+
     model = AutoModelForImageTextToText.from_pretrained(
         settings.model_id,
         quantization_config=bnb_config,
         dtype=compute_dtype,
-        device_map="auto",
+        device_map=device_map,
     )
 
-    # 1. Evaluation/Inference mode with existing trained adapter
+    # 1. Evaluation/Inference with pre-trained adapter
     if adapter_path and Path(adapter_path).exists():
         print(f"[MODEL] Loading trained LoRA adapter from: {adapter_path}")
         model = PeftModel.from_pretrained(model, adapter_path)
@@ -54,7 +56,7 @@ def load_quantized_vlm(
             model.eval()
         return model, processor, compute_dtype
 
-    # 2. Fine-tuning mode (attaches fresh LoRA layers)
+    # 2. Fine-tuning setup
     if trainable:
         if settings.use_4bit:
             model = prepare_model_for_kbit_training(model)
