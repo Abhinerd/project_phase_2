@@ -126,8 +126,8 @@ def main() -> None:
 
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
 
-    if args.max_train_steps < 0:
-        args.max_train_steps = float('inf')
+    if args.max_train_steps <= 0:
+        args.max_train_steps = int(args.num_train_samples / 16 + 1)
 
     print_section("Training Loop Started")
     print(f"[TRAIN] Batch Size        : {args.per_device_train_batch_size}")
