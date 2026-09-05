@@ -50,7 +50,7 @@ def load_quantized_vlm(
                 quantization_config=bnb_config,
                 device_map=device_map,
                 trust_remote_code=settings.trust_remote_code,
-                torch_dtype=compute_dtype,
+                dtype=compute_dtype,
             )
         else:
             model = AutoModelForImageTextToText.from_pretrained(
