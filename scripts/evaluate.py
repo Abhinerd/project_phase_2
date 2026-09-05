@@ -31,7 +31,11 @@ def arguments() -> argparse.Namespace:
 def load_image(path: Path, allow_missing: bool):
     from PIL import Image
     try:
-        return Image.open(path).convert("RGB")
+        img = Image.open(path).convert("RGB")
+        # Resize to reduce memory usage during inference
+        max_size = 448
+        img.thumbnail((max_size, max_size), Image.LANCZOS)
+        return img
     except (FileNotFoundError, OSError) as exc:
         if allow_missing:
             return Image.new("RGB", (224, 224), color=(0, 0, 0))
