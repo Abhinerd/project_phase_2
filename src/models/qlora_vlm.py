@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import torch
-from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training, PeftModel
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
