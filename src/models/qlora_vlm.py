@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Optional, Union
 
 import torch
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
 
 @dataclass
@@ -15,7 +15,7 @@ class QLoRASettings:
     model_id: str
     use_4bit: bool = False
     use_bf16: bool = False
-    trust_remote_code: bool = True
+    trust_remote_code: bool = True  # for models that require custom code (Qwen-VL-Chat), but fine for Qwen2
 
 
 def load_quantized_vlm(
@@ -43,23 +43,13 @@ def load_quantized_vlm(
         device_map = {"": 0} if trainable else "auto"
 
         pbar.set_description("Loading model weights")
-        # Use AutoModelForCausalLM for Qwen, otherwise the generic image-text model
-        if "qwen" in settings.model_id.lower():
-            model = AutoModelForCausalLM.from_pretrained(
-                settings.model_id,
-                quantization_config=bnb_config,
-                device_map=device_map,
-                trust_remote_code=settings.trust_remote_code,
-                dtype=compute_dtype,
-            )
-        else:
-            model = AutoModelForImageTextToText.from_pretrained(
-                settings.model_id,
-                quantization_config=bnb_config,
-                dtype=compute_dtype,
-                device_map=device_map,
-                trust_remote_code=settings.trust_remote_code,
-            )
+        model = AutoModelForImageTextToText.from_pretrained(
+            settings.model_id,
+            quantization_config=bnb_config,
+            dtype=compute_dtype,
+            device_map=device_map,
+            trust_remote_code=settings.trust_remote_code,
+        )
         pbar.update(1)
 
         if adapter_path and Path(adapter_path).exists():
