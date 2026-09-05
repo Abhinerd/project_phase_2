@@ -78,6 +78,9 @@ class VizWizHindiDataset(Dataset):
         path = self.image_root / item["image"]
         try:
             image = Image.open(path).convert("RGB")
+            # Resize to reduce memory (keep aspect ratio)
+            max_size = 224  # or 224 for even less
+            image.thumbnail((max_size, max_size), Image.LANCZOS)
         except (FileNotFoundError, OSError) as exc:
             if not self.allow_missing_images:
                 raise FileNotFoundError(
