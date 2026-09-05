@@ -63,7 +63,7 @@ def main() -> None:
     from torch.optim import AdamW
     from torch.utils.data import DataLoader
 
-    from src.data.vizwiz import LlavaDataCollator, VizWizHindiDataset, cache_tokenized_text, prepare_records
+    from src.data.vizwiz import LlavaDataCollator, VizWizHindiDataset, prepare_records
     from src.models.qlora_vlm import QLoRASettings, load_quantized_vlm
 
     print(f"[CHECK] PyTorch Version    : {torch.__version__}")
