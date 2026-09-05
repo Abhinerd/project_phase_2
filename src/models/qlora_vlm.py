@@ -17,6 +17,7 @@ class QLoRASettings:
     model_id: str
     use_4bit: bool = False
     use_bf16: bool = False
+    trust_remote_code: bool = True
 
 
 def load_quantized_vlm(
@@ -27,7 +28,8 @@ def load_quantized_vlm(
     """Loads a vision-language model using AutoModelForImageTextToText."""
     with tqdm(total=4, desc="Loading VLM", unit="step") as pbar:
         processor = AutoProcessor.from_pretrained(
-            adapter_path if adapter_path and Path(adapter_path).exists() else settings.model_id
+            adapter_path if adapter_path and Path(adapter_path).exists() else settings.model_id,
+            trust_remote_code=settings.trust_remote_code
         )
         pbar.update(1)
 
@@ -50,6 +52,7 @@ def load_quantized_vlm(
             quantization_config=bnb_config,
             dtype=compute_dtype,
             device_map=device_map,
+            trust_remote_code=settings.trust_remote_code,
         )
         pbar.update(1)
 
