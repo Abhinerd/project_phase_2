@@ -91,6 +91,13 @@ def main() -> None:
             input_length = inputs["input_ids"].shape[-1]
             generated_trimmed = generated[0][input_length:]
             prediction = processor.decode(generated_trimmed, skip_special_tokens=True).strip()
+            # Print first 5 predictions and references
+            if len(results) < 5:
+                print(f"Sample {len(results)+1}:")
+                print(f"  Question: {question}")
+                print(f"  Prediction: '{prediction}'")
+                print(f"  References: {item['answers'][:3]}")
+                print("---")
 
             results.append({
                 "index": item["index"], 
