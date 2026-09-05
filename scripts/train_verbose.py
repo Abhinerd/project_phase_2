@@ -113,8 +113,8 @@ def main() -> None:
     print(f"[MODEL] Trainable Params  : {trainable_params:,} / {all_params:,} ({100 * trainable_params / all_params:.2f}%)")
 
     print("[DATA] Caching tokenized text...")
-    cache_tokenized_text(train_records, processor, args.cache_dir, "fast_train")
-    cache_tokenized_text(val_records, processor, args.cache_dir, "fast_val")
+    # cache_tokenized_text(train_records, processor, args.cache_dir, "fast_train")
+    # cache_tokenized_text(val_records, processor, args.cache_dir, "fast_val")
 
     train_set = VizWizHindiDataset(train_records, args.image_root, args.allow_missing_images)
     loader = DataLoader(

@@ -22,7 +22,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/checkpoints/full_vlm_adapter")
     parser.add_argument("--num-train-samples", type=int, default=50, help="Training prefix to skip for the deterministic smoke-test holdout.")
     parser.add_argument("--num-val-samples", type=int, default=20)
-    parser.add_argument("--generation-max-new-tokens", type=int, default=30)
+    parser.add_argument("--generation-max-new-tokens", type=int, default=80)   # increased for Hindi
     parser.add_argument("--allow-missing-images", action="store_true")
     parser.add_argument("--fp16", action="store_true")
     return parser.parse_args()
@@ -42,7 +42,7 @@ def main() -> None:
     args = arguments()
     import torch
 
-    from src.data.vizwiz import prepare_records
+    from src.data.vizwiz import build_conversation, prepare_records
     from src.evaluation import vizwiz_ans
     from src.models.qlora_vlm import QLoRASettings, load_quantized_vlm
 
@@ -71,42 +71,25 @@ def main() -> None:
     with torch.inference_mode():
         for item in records:
             image = load_image(args.image_root / item["image"], args.allow_missing_images)
-            question = item.get("question", item.get("text", ""))
+            question = item["question"]
 
-            # -------------------------------------------------------------
-            # 1. Format prompt using Processor Chat Template (SmolVLM format)
-            # -------------------------------------------------------------
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text", "text": f"प्रश्न: {question}\nउत्तर संक्षिप्त में हिंदी में दें।"}
-                    ]
-                }
-            ]
-            prompt = processor.apply_chat_template(messages, add_generation_prompt=True)
+            # Build conversation using the same helper as training
+            conv = build_conversation(question, target=None)  # no answer for inference
+            prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
 
-            # -------------------------------------------------------------
-            # 2. Tokenize text + image inputs
-            # -------------------------------------------------------------
             inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
 
-            # -------------------------------------------------------------
-            # 3. Generate predictions
-            # -------------------------------------------------------------
             generated = model.generate(
-                **inputs, 
-                max_new_tokens=args.generation_max_new_tokens, 
-                do_sample=False
+                **inputs,
+                max_new_tokens=args.generation_max_new_tokens,
+                do_sample=True,
+                temperature=0.3,
+                top_p=0.9,
+                repetition_penalty=1.1
             )
 
-            # -------------------------------------------------------------
-            # 4. Slices input tokens to return output text only
-            # -------------------------------------------------------------
             input_length = inputs["input_ids"].shape[-1]
             generated_trimmed = generated[0][input_length:]
-            
             prediction = processor.decode(generated_trimmed, skip_special_tokens=True).strip()
 
             results.append({

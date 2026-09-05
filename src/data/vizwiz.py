@@ -1,9 +1,9 @@
-"""Portable VizWiz-Hindi records, disk cache, and LLaVA data collation."""
+"""Portable VizWiz-Hindi records, multimodal collation with chat template."""
 
 from __future__ import annotations
 
-import hashlib
 import json
+import hashlib
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,7 +19,6 @@ def _cache_key(dataset_path: Path, limit: int, split: str) -> str:
 
 
 def choose_target(record: dict[str, Any]) -> tuple[str, list[str]]:
-    """Use a Hindi answer when supplied; otherwise use the first English answer."""
     hindi = record.get("answers_hi") or []
     source = hindi if hindi else record.get("answers") or []
     answers = [entry.get("answer", "").strip() for entry in source if entry.get("answer", "").strip()]
@@ -28,17 +27,20 @@ def choose_target(record: dict[str, Any]) -> tuple[str, list[str]]:
     return answers[0], answers
 
 
-def format_prompt(question: str, target: str | None = None) -> str:
-    prompt = (
-        "USER: <image>\n"
-        f"{question.strip()}\n"
-        "Give a short, direct answer. ASSISTANT:"
-    )
-    return f"{prompt} {target}" if target is not None else prompt
+def build_conversation(question: str, target: str | None = None):
+    """
+    Build a conversation list compatible with processor.apply_chat_template().
+    If target is provided, it is the assistant's answer (used for training labels).
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
+    ]
+    if target is not None:
+        messages.append({"role": "assistant", "content": target})
+    return messages
 
 
 def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str) -> list[dict[str, Any]]:
-    """Create/reuse serializable records and lightweight tokenization cache."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{split}_{_cache_key(dataset_path, limit, split)}"
     prepared_path = cache_dir / f"{stem}_prepared.json"
@@ -50,38 +52,16 @@ def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str)
     for index, item in enumerate(raw):
         target, answers = choose_target(item)
         question = item.get("question_hi") or item.get("question") or ""
-        records.append(
-            {
-                "index": index,
-                "image": item["image"],
-                "question": question,
-                "target": target,
-                "answers": answers,
-                "answer_type": item.get("answer_type"),
-                "train_prompt": format_prompt(question, target),
-                "generation_prompt": format_prompt(question),
-            }
-        )
+        records.append({
+            "index": index,
+            "image": item["image"],
+            "question": question,
+            "target": target,
+            "answers": answers,
+            "answer_type": item.get("answer_type"),
+        })
     prepared_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
     return records
-
-
-def cache_tokenized_text(records: Iterable[dict[str, Any]], processor: Any, cache_dir: Path, name: str) -> Path:
-    """Persist tokenizer-only representations for fast audit/repeated preparation.
-
-    The collator still tokenizes multimodal batches because image placeholder expansion
-    is model-specific; this cache verifies and preserves the text-tokenization stage.
-    """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / f"{name}_tokenized_text.json"
-    if path.exists():
-        return path
-    payload = []
-    for item in records:
-        encoded = processor.tokenizer(item["train_prompt"], add_special_tokens=True)
-        payload.append({"index": item["index"], "input_ids": encoded["input_ids"], "attention_mask": encoded["attention_mask"]})
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
 
 
 class VizWizHindiDataset(Dataset):
@@ -98,7 +78,6 @@ class VizWizHindiDataset(Dataset):
         path = self.image_root / item["image"]
         try:
             image = Image.open(path).convert("RGB")
-            image_is_placeholder = False
         except (FileNotFoundError, OSError) as exc:
             if not self.allow_missing_images:
                 raise FileNotFoundError(
@@ -106,8 +85,7 @@ class VizWizHindiDataset(Dataset):
                     "or use --allow-missing-images only for a wiring smoke test."
                 ) from exc
             image = Image.new("RGB", (224, 224), color=(0, 0, 0))
-            image_is_placeholder = True
-        return {**item, "image_data": image, "image_is_placeholder": image_is_placeholder}
+        return {**item, "image_data": image}
 
 
 class LlavaDataCollator:
@@ -115,17 +93,35 @@ class LlavaDataCollator:
         self.processor = processor
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        # Build full conversation strings for each example
+        texts = []
+        images = []
+        for ex in examples:
+            conv = build_conversation(ex["question"], ex["target"])
+            prompt = self.processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
+            texts.append(prompt)
+            images.append(ex["image_data"])
+
         batch = self.processor(
-            text=[item["train_prompt"] for item in examples],
-            images=[item["image_data"] for item in examples],
+            text=texts,
+            images=images,
             padding=True,
             return_tensors="pt",
         )
+
+        # Prepare labels: we mask the user part (including the assistant start token)
         labels = batch["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        # Supervise only the assistant-answer suffix, leaving prompt tokens masked.
-        for row, item in enumerate(examples):
-            prefix = self.processor.tokenizer(item["generation_prompt"], add_special_tokens=True)["input_ids"]
-            labels[row, : len(prefix)] = -100
+
+        for i, ex in enumerate(examples):
+            # User‑only prompt (with assistant start token, but no answer)
+            user_conv = build_conversation(ex["question"], target=None)
+            user_text = self.processor.apply_chat_template(
+                user_conv, tokenize=False, add_generation_prompt=True
+            )
+            user_ids = self.processor.tokenizer(user_text, add_special_tokens=True)["input_ids"]
+            user_len = len(user_ids)
+            labels[i, :user_len] = -100
+
         batch["labels"] = labels
         return batch
