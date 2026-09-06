@@ -85,11 +85,8 @@ def main() -> None:
 
             generated = model.generate(
                 **inputs,
-                max_new_tokens=args.generation_max_new_tokens,
-                do_sample=True,
-                temperature=0.3,
-                top_p=0.9,
-                repetition_penalty=1.1
+                max_new_tokens=20,
+                do_sample=False,
             )
 
             input_length = inputs["input_ids"].shape[-1]

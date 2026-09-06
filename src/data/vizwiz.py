@@ -28,12 +28,11 @@ def choose_target(record: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def build_conversation(question: str, target: str | None = None):
-    """
-    Build a conversation list compatible with processor.apply_chat_template().
-    If target is provided, it is the assistant's answer (used for training labels).
-    """
+    # Add explicit instruction for short answer
+    instruction = "इस प्रश्न का उत्तर एक शब्द या छोटे वाक्य में दें।"  # "Answer in one word or short phrase."
+    full_question = f"{question} {instruction}"
     messages = [
-        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": question}]}
+        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": full_question}]}
     ]
     if target is not None:
         messages.append({"role": "assistant", "content": target})
