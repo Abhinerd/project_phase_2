@@ -85,7 +85,7 @@ def main() -> None:
     print_section("Data Preparation & Tokenization")
     print(f"[DATA] Loading all records and filtering for split '{args.split}'...")
     all_records = prepare_records(args.dataset, args.cache_dir, None, "train")
-    train_records = [r for r in all_records if r.get("split") == args.split]
+    train_records = [r for r in all_records if r.get("source") == args.split]
 
     if args.max_train_samples > 0:
         train_records = train_records[: args.max_train_samples]

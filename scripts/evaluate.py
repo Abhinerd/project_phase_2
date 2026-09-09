@@ -67,7 +67,7 @@ def main() -> None:
 
     # Filter by split
     if args.split != "all":
-        records = [r for r in all_records if r.get("split") == args.split]
+        records = [r for r in all_records if r.get("source") == args.split]
     else:
         records = all_records
 
