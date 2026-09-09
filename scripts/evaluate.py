@@ -58,12 +58,8 @@ def main() -> None:
     torch.cuda.reset_peak_memory_stats()
 
     # Load all records (no limit)
-    all_records = prepare_records(
-        args.dataset,
-        args.cache_dir,
-        None,                    # load all
-        "evaluation",
-    )
+    with open(args.dataset, 'r', encoding='utf-8') as f:
+        all_records = json.load(f)
 
     # Filter by split
     if args.split != "all":

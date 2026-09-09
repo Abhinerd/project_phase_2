@@ -83,8 +83,9 @@ def main() -> None:
     torch.cuda.reset_peak_memory_stats()
 
     print_section("Data Preparation & Tokenization")
-    print(f"[DATA] Loading all records and filtering for split '{args.split}'...")
-    all_records = prepare_records(args.dataset, args.cache_dir, None, "train")
+    print(f"[DATA] Loading all records from JSON and filtering for split '{args.split}'...")
+    with open(args.dataset, 'r', encoding='utf-8') as f:
+        all_records = json.load(f)
     train_records = [r for r in all_records if r.get("source") == args.split]
 
     if args.max_train_samples > 0:
