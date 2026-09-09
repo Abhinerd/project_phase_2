@@ -22,8 +22,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=ROOT / "artifacts/cache")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/checkpoints/fast_test_adapter")
-    parser.add_argument("--num-train-samples", type=int, default=1000)
-    parser.add_argument("--num-val-samples", type=int, default=20)
+    parser.add_argument("--split", default="train", choices=["train", "val", "test"],
+                        help="Which dataset split to use for training (default: train).")
+    parser.add_argument("--max-train-samples", type=int, default=-1,
+                        help="Limit number of training samples (default: -1 = use all in split).")
     parser.add_argument("--num-train-epochs", type=int, default=2)
     parser.add_argument("--per-device-train-batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=2)
@@ -83,16 +85,19 @@ def main() -> None:
     print_section("Data Preparation & Tokenization")
     print(f"[DATA] Loading train records (N={args.num_train_samples})...")
 
-    if args.num_train_samples > 0:
-        train_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples, "train")
-    else:
-        # Load ALL available records if num-train-samples is set to -1 or 0
-        train_records = prepare_records(args.dataset, args.cache_dir, None, "train")
-        args.num_train_samples  = len(train_records)
+    # Load all records, then filter by split
+    all_records = prepare_records(args.dataset, args.cache_dir, None, "train")
+    train_records = [r for r in all_records if r.get("split") == args.split]
 
-    print(f"[DATA] Reserving validation records (N={args.num_val_samples})...")
-    all_records = prepare_records(args.dataset, args.cache_dir, args.num_train_samples + args.num_val_samples, "train_plus_val")
-    val_records = all_records[args.num_train_samples :]
+    if args.max_train_samples > 0:
+        train_records = train_records[: args.max_train_samples]
+
+    if not train_records:
+        raise ValueError(f"No records found for split '{args.split}'.")
+
+    # For now, no separate validation set is used inside the training loop.
+    # If you want to reserve a validation split, you can load it similarly later.
+    val_records = []  # placeholder
 
     print_section("Loading Vision-Language Model")
     load_start = time.perf_counter()
@@ -127,7 +132,7 @@ def main() -> None:
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
 
     if args.max_train_steps <= 0:
-        args.max_train_steps = int(args.num_train_samples / 16 + 1)
+        args.max_train_steps = int(len(train_records) / 16 + 1)
 
     print_section("Training Loop Started")
     print(f"[TRAIN] Batch Size        : {args.per_device_train_batch_size}")
