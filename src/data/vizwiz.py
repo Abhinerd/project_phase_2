@@ -66,6 +66,7 @@ def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str)
             "target": target,
             "answers": answers,
             "answer_type": item.get("answer_type"),
+            "split": item.get("split"),
         })
     prepared_path.write_text(json.dumps(records, ensure_ascii=False), encoding="utf-8")
     return records
