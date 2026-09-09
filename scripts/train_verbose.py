@@ -83,9 +83,7 @@ def main() -> None:
     torch.cuda.reset_peak_memory_stats()
 
     print_section("Data Preparation & Tokenization")
-    print(f"[DATA] Loading train records (N={args.num_train_samples})...")
-
-    # Load all records, then filter by split
+    print(f"[DATA] Loading all records and filtering for split '{args.split}'...")
     all_records = prepare_records(args.dataset, args.cache_dir, None, "train")
     train_records = [r for r in all_records if r.get("split") == args.split]
 
@@ -95,9 +93,7 @@ def main() -> None:
     if not train_records:
         raise ValueError(f"No records found for split '{args.split}'.")
 
-    # For now, no separate validation set is used inside the training loop.
-    # If you want to reserve a validation split, you can load it similarly later.
-    val_records = []  # placeholder
+    val_records = []  # placeholder; no separate validation set inside training loop
 
     print_section("Loading Vision-Language Model")
     load_start = time.perf_counter()
@@ -132,7 +128,12 @@ def main() -> None:
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
 
     if args.max_train_steps <= 0:
-        args.max_train_steps = int(len(train_records) / 16 + 1)
+        steps_per_epoch = (
+            len(train_records)
+            // (args.per_device_train_batch_size * args.gradient_accumulation_steps)
+            + 1
+        )
+        args.max_train_steps = steps_per_epoch * args.num_train_epochs
 
     print_section("Training Loop Started")
     print(f"[TRAIN] Batch Size        : {args.per_device_train_batch_size}")
