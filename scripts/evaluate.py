@@ -1,4 +1,4 @@
-"""Mini generated-answer evaluation for a saved QLoRA smoke-test adapter."""
+"""Evaluation for a saved QLoRA adapter using dataset split information."""
 
 from __future__ import annotations
 
@@ -20,8 +20,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=ROOT / "artifacts/cache")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/checkpoints/full_vlm_adapter")
-    parser.add_argument("--num-train-samples", type=int, default=50, help="Training prefix to skip for the deterministic smoke-test holdout.")
-    parser.add_argument("--num-val-samples", type=int, default=20)
+    parser.add_argument("--split", default="val", choices=["train", "val", "test", "all"],
+                        help="Which dataset split to evaluate on (default: val). Use 'all' for entire dataset.")
+    parser.add_argument("--max-samples", type=int, default=-1,
+                        help="Limit number of samples to evaluate (default: -1 = all). Useful for smoke tests.")
     parser.add_argument("--generation-max-new-tokens", type=int, default=80)   # increased for Hindi
     parser.add_argument("--allow-missing-images", action="store_true")
     parser.add_argument("--fp16", action="store_true")
@@ -54,18 +56,30 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("Evaluation requires CUDA because the adapter is loaded with 4-bit bitsandbytes.")
     torch.cuda.reset_peak_memory_stats()
-    
+
+    # Load all records (no limit)
     all_records = prepare_records(
         args.dataset,
         args.cache_dir,
-        args.num_train_samples + args.num_val_samples,
-        "evaluation_source",
+        None,                    # load all
+        "evaluation",
     )
-    records = all_records[args.num_train_samples :]
-    
+
+    # Filter by split
+    if args.split != "all":
+        records = [r for r in all_records if r.get("split") == args.split]
+    else:
+        records = all_records
+
+    if args.max_samples > 0:
+        records = records[: args.max_samples]
+
+    if not records:
+        raise ValueError(f"No records found for split '{args.split}'. Check dataset split labels.")
+
     model, processor, _ = load_quantized_vlm(
-        QLoRASettings(args.model_id, use_bf16=not args.fp16), 
-        adapter_path=str(args.adapter_path), 
+        QLoRASettings(args.model_id, use_bf16=not args.fp16),
+        adapter_path=str(args.adapter_path),
         trainable=False
     )
     model.eval()
@@ -101,26 +115,29 @@ def main() -> None:
                 print("---")
 
             results.append({
-                "index": item["index"], 
-                "prediction": prediction, 
-                "references": item["answers"], 
+                "index": item["index"],
+                "prediction": prediction,
+                "references": item["answers"],
                 "ans": vizwiz_ans(prediction, item["answers"])
             })
 
     mean_ans = sum(row["ans"] for row in results) / len(results) if results else 0.0
     args.output_dir.mkdir(parents=True, exist_ok=True)
     payload = {
+        "split": args.split,
         "samples": len(results),
         "mean_vizwiz_ans": mean_ans,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "peak_vram_gib": round(torch.cuda.max_memory_allocated() / 1024**3, 3),
         "predictions": results,
     }
-    
+
     eval_file = args.output_dir / "fast_test_evaluation.json"
     eval_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    
-    print("FAST TEST EVALUATION COMPLETE")
+
+    print("EVALUATION COMPLETE")
+    print(f"split={args.split}")
+    print(f"samples={len(results)}")
     print(f"mean_vizwiz_ans={mean_ans:.4f}")
     print(f"elapsed_seconds={payload['elapsed_seconds']}")
     print(f"peak_vram_gib={payload['peak_vram_gib']}")
