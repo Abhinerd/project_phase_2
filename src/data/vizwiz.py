@@ -28,8 +28,7 @@ def choose_target(record: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def build_conversation(question: str, target: str | None = None):
-    # Add explicit instruction for short answer
-    instruction = "इस प्रश्न का उत्तर एक शब्द या छोटे वाक्य में दें।"  # "Answer in one word or short phrase."
+    instruction = "इस प्रश्न का उत्तर एक शब्द या छोटे वाक्य में दें।"
     full_question = f"{question} {instruction}"
     messages = [
         {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": full_question}]}
@@ -46,7 +45,16 @@ def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str)
     if prepared_path.exists():
         return json.loads(prepared_path.read_text(encoding="utf-8"))
 
-    raw = json.loads(dataset_path.read_text(encoding="utf-8"))[:limit]
+    raw = json.loads(dataset_path.read_text(encoding="utf-8"))
+    
+    # FIX: STRICTLY FILTER BY SPLIT FIRST
+    if split != "all":
+        raw = [item for item in raw if item.get("split") == split]
+    
+    # THEN APPLY LIMIT
+    if limit is not None and limit > 0:
+        raw = raw[:limit]
+
     records: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
         target, answers = choose_target(item)
@@ -77,8 +85,7 @@ class VizWizHindiDataset(Dataset):
         path = self.image_root / item["image"]
         try:
             image = Image.open(path).convert("RGB")
-            # Resize to reduce memory (keep aspect ratio)
-            max_size = 224  # or 224 for even less
+            max_size = 448  # Increased to 448 for better VLM accuracy
             image.thumbnail((max_size, max_size), Image.LANCZOS)
         except (FileNotFoundError, OSError) as exc:
             if not self.allow_missing_images:
@@ -86,7 +93,7 @@ class VizWizHindiDataset(Dataset):
                     f"Cannot load {path}. Supply --image-root containing VizWiz images, "
                     "or use --allow-missing-images only for a wiring smoke test."
                 ) from exc
-            image = Image.new("RGB", (224, 224), color=(0, 0, 0))
+            image = Image.new("RGB", (448, 448), color=(0, 0, 0))
         return {**item, "image_data": image}
 
 
@@ -95,7 +102,6 @@ class LlavaDataCollator:
         self.processor = processor
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        # Build full conversation strings for each example
         texts = []
         images = []
         for ex in examples:
@@ -111,12 +117,10 @@ class LlavaDataCollator:
             return_tensors="pt",
         )
 
-        # Prepare labels: we mask the user part (including the assistant start token)
         labels = batch["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
 
         for i, ex in enumerate(examples):
-            # User‑only prompt (with assistant start token, but no answer)
             user_conv = build_conversation(ex["question"], target=None)
             user_text = self.processor.apply_chat_template(
                 user_conv, tokenize=False, add_generation_prompt=True

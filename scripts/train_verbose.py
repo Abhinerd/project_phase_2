@@ -1,10 +1,9 @@
-"""Verbose end-to-end QLoRA/LoRA smoke training for VizWiz-Hindi data with extended logging and checks."""
+"""Verbose end-to-end QLoRA/LoRA training with per-epoch validation."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -12,29 +11,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DEFAULT_MODEL = "HuggingFaceTB/SmolVLM-256M-Instruct"
+DEFAULT_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
 
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-id", default=DEFAULT_MODEL)
-    parser.add_argument("--dataset", type=Path, default=ROOT / "phase_1/data/vizwiz_train_hindi.json")
+    parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, default=ROOT / "artifacts/cache")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/checkpoints/fast_test_adapter")
-    parser.add_argument("--split", default="train", choices=["train", "val", "test"],
-                        help="Which dataset split to use for training (default: train).")
-    parser.add_argument("--max-train-samples", type=int, default=-1,
-                        help="Limit number of training samples (default: -1 = use all in split).")
-    parser.add_argument("--num-train-epochs", type=int, default=2)
-    parser.add_argument("--per-device-train-batch-size", type=int, default=2)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=2)
-    parser.add_argument("--max-train-steps", type=int, default=-1, help="Max steps to train. Set to -1 to train full epochs.")
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--split", default="train", choices=["train", "val", "test"])
+    parser.add_argument("--max-train-samples", type=int, default=-1)
+    parser.add_argument("--num-val-samples", type=int, default=500, help="Samples to eval per epoch for checkpoint selection.")
+    parser.add_argument("--num-train-epochs", type=int, default=3)
+    parser.add_argument("--per-device-train-batch-size", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--max-train-steps", type=int, default=-1)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
-    parser.add_argument("--max-vram-gib", type=float, default=16.0)
+    parser.add_argument("--max-vram-gib", type=float, default=40.0)
     parser.add_argument("--allow-missing-images", action="store_true")
-    parser.add_argument("--use-4bit", action="store_true", help="Enable 4-bit quantization (Requires Compute Capability >= 7.0 like T4/A100).")
-    parser.add_argument("--fp16", action="store_true", help="Prefer fp16 even where bf16 is available.")
+    parser.add_argument("--use-4bit", action="store_true")
+    parser.add_argument("--fp16", action="store_true")
     return parser.parse_args()
 
 
@@ -47,20 +45,45 @@ def move_to_model_device(batch, model):
     return {name: tensor.to(device) for name, tensor in batch.items()}
 
 
+def evaluate_model(model, processor, records, image_root, allow_missing, device):
+    """Lightweight validation loop for checkpoint selection."""
+    import torch
+    from PIL import Image
+    from src.data.vizwiz import build_conversation
+    from src.evaluation import vizwiz_ans
+    
+    model.eval()
+    results = []
+    
+    with torch.inference_mode():
+        for item in records:
+            try:
+                img_path = Path(image_root) / item["image"]
+                image = Image.open(img_path).convert("RGB")
+                image.thumbnail((448, 448), Image.LANCZOS)
+            except Exception:
+                if not allow_missing:
+                    continue
+                image = Image.new("RGB", (448, 448), color=(0, 0, 0))
+                
+            conv = build_conversation(item["question"], target=None)
+            prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
+            inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
+            
+            generated = model.generate(**inputs, max_new_tokens=20, do_sample=False)
+            input_length = inputs["input_ids"].shape[-1]
+            pred = processor.decode(generated[0][input_length:], skip_special_tokens=True).strip()
+            
+            ans = vizwiz_ans(pred, item["answers"])
+            results.append({"ans": ans, "prediction": pred, "answer_type": item.get("answer_type", "other")})
+            
+    model.train()
+    mean_ans = sum(r["ans"] for r in results) / len(results) if results else 0.0
+    return mean_ans
+
+
 def main() -> None:
     args = arguments()
-
-    print_section("Pre-Flight Checks & Configuration")
-    print(f"[CHECK] Python Version     : {sys.version.split()[0]}")
-    print(f"[CHECK] Root Directory     : {ROOT}")
-    print(f"[CHECK] Dataset Path       : {args.dataset} (Exists: {args.dataset.exists()})")
-    print(f"[CHECK] Image Root Path    : {args.image_root} (Exists: {args.image_root.exists()})")
-    print(f"[CHECK] Target Model ID    : {args.model_id}")
-    print(f"[CHECK] Output Directory   : {args.output_dir}")
-
-    if not args.dataset.exists():
-        raise FileNotFoundError(f"Dataset file not found at: {args.dataset}")
-
     import torch
     from torch.optim import AdamW
     from torch.utils.data import DataLoader
@@ -68,94 +91,50 @@ def main() -> None:
     from src.data.vizwiz import LlavaDataCollator, VizWizHindiDataset, prepare_records
     from src.models.qlora_vlm import QLoRASettings, load_quantized_vlm
 
-    print(f"[CHECK] PyTorch Version    : {torch.__version__}")
-    print(f"[CHECK] CUDA Available     : {torch.cuda.is_available()}")
-
-    started = time.perf_counter()
     if not torch.cuda.is_available():
-        raise RuntimeError("This verification pipeline requires a CUDA-capable GPU.")
-
-    gpu_name = torch.cuda.get_device_name(0)
-    total_vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    print(f"[CHECK] GPU Device Name    : {gpu_name}")
-    print(f"[CHECK] GPU VRAM Total     : {total_vram_gib:.2f} GiB")
+        raise RuntimeError("CUDA required.")
 
     torch.cuda.reset_peak_memory_stats()
 
-    print_section("Data Preparation & Tokenization")
-    print(f"[DATA] Loading all records from JSON and filtering for split '{args.split}'...")
-    with open(args.dataset, 'r', encoding='utf-8') as f:
-        all_records = json.load(f)
-    train_records = [r for r in all_records if r.get("source") == args.split]
-
-    if args.max_train_samples > 0:
-        train_records = train_records[: args.max_train_samples]
-
+    print_section("Data Preparation")
+    train_records = prepare_records(args.dataset, args.cache_dir, args.max_train_samples, args.split)
+    val_records = prepare_records(args.dataset, args.cache_dir, args.num_val_samples, "val")
+    
     if not train_records:
-        raise ValueError(f"No records found for split '{args.split}'.")
+        raise ValueError("No training records found.")
 
-    val_records = []  # placeholder; no separate validation set inside training loop
-
-    print_section("Loading Vision-Language Model")
-    load_start = time.perf_counter()
+    print_section("Loading VLM")
     model, processor, compute_dtype = load_quantized_vlm(
-        QLoRASettings(
-            model_id=args.model_id,
-            use_4bit=args.use_4bit,
-            use_bf16=not args.fp16,
-        ),
-        trainable=True,
+        QLoRASettings(model_id=args.model_id, use_4bit=args.use_4bit, use_bf16=not args.fp16),
+        trainable=True
     )
-    print(f"[MODEL] Loaded in {time.perf_counter() - load_start:.2f}s")
-    print(f"[MODEL] Compute Data Type : {compute_dtype}")
-    print(f"[MODEL] 4-Bit Quantized   : {args.use_4bit}")
-
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    all_params = sum(p.numel() for p in model.parameters())
-    print(f"[MODEL] Trainable Params  : {trainable_params:,} / {all_params:,} ({100 * trainable_params / all_params:.2f}%)")
-
-    print("[DATA] Caching tokenized text...")
-    # cache_tokenized_text(train_records, processor, args.cache_dir, "fast_train")
-    # cache_tokenized_text(val_records, processor, args.cache_dir, "fast_val")
 
     train_set = VizWizHindiDataset(train_records, args.image_root, args.allow_missing_images)
     loader = DataLoader(
         train_set,
         batch_size=args.per_device_train_batch_size,
-        shuffle=False,
+        shuffle=True,
         collate_fn=LlavaDataCollator(processor),
     )
 
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad), lr=args.learning_rate)
 
     if args.max_train_steps <= 0:
-        steps_per_epoch = (
-            len(train_records)
-            // (args.per_device_train_batch_size * args.gradient_accumulation_steps)
-            + 1
-        )
-        args.max_train_steps = steps_per_epoch * args.num_train_epochs
+        args.max_train_steps = (len(train_records) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)) + 1
 
     print_section("Training Loop Started")
-    print(f"[TRAIN] Batch Size        : {args.per_device_train_batch_size}")
-    print(f"[TRAIN] Grad Accum Steps  : {args.gradient_accumulation_steps}")
-    print(f"[TRAIN] Effective Batch   : {args.per_device_train_batch_size * args.gradient_accumulation_steps}")
-    print(f"[TRAIN] Target Max Steps   : {args.max_train_steps}\n")
-
     model.train()
-    losses: list[float] = []
-    optimizer.zero_grad(set_to_none=True)
+    best_val_ans = 0.0
     step = 0
-    step_start_time = time.perf_counter()
+    losses = []
+    started = time.perf_counter()
 
     for epoch in range(args.num_train_epochs):
         print(f"--- Epoch {epoch + 1}/{args.num_train_epochs} ---")
         for batch_index, batch in enumerate(loader):
             batch = move_to_model_device(batch, model)
-
             with torch.autocast("cuda", dtype=compute_dtype):
-                loss_out = model(**batch).loss
-                loss = loss_out / args.gradient_accumulation_steps
+                loss = model(**batch).loss / args.gradient_accumulation_steps
 
             loss.backward()
 
@@ -163,81 +142,44 @@ def main() -> None:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 step += 1
-
                 step_loss = loss.item() * args.gradient_accumulation_steps
                 losses.append(step_loss)
-
-                step_duration = time.perf_counter() - step_start_time
-                current_vram = torch.cuda.memory_allocated() / (1024**3)
-                peak_vram = torch.cuda.max_memory_allocated() / (1024**3)
-
-                print(
-                    f"[STEP {step:02d}/{args.max_train_steps}] "
-                    f"Loss: {step_loss:.4f} | "
-                    f"Time: {step_duration:.2f}s | "
-                    f"VRAM Allocated: {current_vram:.2f} GiB | "
-                    f"VRAM Peak: {peak_vram:.2f} GiB"
-                )
-
-                step_start_time = time.perf_counter()
-
+                print(f"[STEP {step}/{args.max_train_steps}] Loss: {step_loss:.4f}")
+                
                 if step >= args.max_train_steps:
-                    print(f"[TRAIN] Reached max requested steps ({args.max_train_steps}). Halting.")
                     break
-        if args.max_train_steps > 0 and step >= args.max_train_steps:
-            print(f"[TRAIN] Reached max requested steps ({args.max_train_steps}). Halting.")
+                    
+        # --- VALIDATION & CHECKPOINTING ---
+        print("Running validation...")
+        val_ans = evaluate_model(model, processor, val_records, args.image_root, args.allow_missing_images, next(model.parameters()).device)
+        print(f"Epoch {epoch+1} Validation ANS: {val_ans:.4f}")
+        
+        if val_ans > best_val_ans:
+            best_val_ans = val_ans
+            print(f"New best score! Saving adapter to {args.output_dir}")
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            model.save_pretrained(args.output_dir)
+            processor.save_pretrained(args.output_dir)
+
+        if step >= args.max_train_steps:
             break
 
-    print_section("Saving Artifacts & Metrics")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"[SAVE] Saving adapter weights to: {args.output_dir}")
-    model.save_pretrained(args.output_dir)
-    processor.save_pretrained(args.output_dir)
-
     peak_vram_gib = round(torch.cuda.max_memory_allocated() / 1024**3, 3)
-    total_elapsed = round(time.perf_counter() - started, 3)
-
     metrics = {
-        "mode": "fast_test_verbose",
+        "mode": "full_train_verbose",
         "model_id": args.model_id,
         "train_samples": len(train_records),
-        "validation_samples_reserved": len(val_records),
-        "epochs_requested": args.num_train_epochs,
+        "best_val_ans": best_val_ans,
+        "epochs_completed": epoch + 1,
         "optimizer_steps": step,
         "losses": losses,
-        "final_loss": losses[-1] if losses else None,
-        "elapsed_seconds": total_elapsed,
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
         "peak_vram_gib": peak_vram_gib,
-        "vram_limit_gib": args.max_vram_gib,
-        "vram_within_limit": peak_vram_gib <= args.max_vram_gib,
-        "compute_dtype": str(compute_dtype),
-        "use_4bit": args.use_4bit,
-        "missing_images_allowed": args.allow_missing_images,
     }
-
-    metrics_file = args.output_dir / "training_metrics.json"
-    metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print(f"[SAVE] Saved training metrics to: {metrics_file}")
-
-    print_section("Execution Summary")
-    print(f"  * Adapter Path       : {args.output_dir}")
-    print(f"  * Total Time Elapsed : {total_elapsed} s")
-    print(f"  * Peak VRAM Used     : {peak_vram_gib} GiB / Limit {args.max_vram_gib} GiB")
-    print(f"  * Steps Completed    : {step}")
-    if losses:
-        print(f"  * Initial Loss       : {losses[0]:.4f}")
-        print(f"  * Final Loss         : {losses[-1]:.4f}")
-
-    if not metrics["vram_within_limit"]:
-        raise RuntimeError(
-            f"Peak VRAM {peak_vram_gib:.3f} GiB exceeds configured "
-            f"{args.max_vram_gib:.3f} GiB safety limit."
-        )
-
-    print_section("Fast Smoke Test Complete")
-    print("Run `python scripts/evaluate.py --model-id ... --adapter-path ...` to verify generation.")
-
+    (args.output_dir / "training_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print_section("Training Complete")
+    print(f"Best Validation ANS: {best_val_ans:.4f}")
+    print(f"Peak VRAM: {peak_vram_gib} GiB")
 
 if __name__ == "__main__":
     main()
