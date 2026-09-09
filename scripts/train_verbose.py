@@ -28,6 +28,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--per-device-train-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--max-train-steps", type=int, default=-1)
+    parser.add_argument("--multiply-max-train-steps", type=bool, default=False)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--max-vram-gib", type=float, default=40.0)
     parser.add_argument("--allow-missing-images", action="store_true")
@@ -121,6 +122,8 @@ def main() -> None:
 
     if args.max_train_steps <= 0:
         args.max_train_steps = (len(train_records) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)) + 1
+        if args.multiply_max_train_steps:
+            args.max_train_steps *= args.num_train_epochs
 
     print_section("Training Loop Started")
     model.train()
