@@ -24,7 +24,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=-1)
     parser.add_argument("--allow-missing-images", action="store_true")
     parser.add_argument("--fp16", action="store_true")
-    parser.add_argument("--num-eval-sample", type=int, default=-1)
+    parser.add_argument("--num-eval-samples", type=int, default=-1)
     return parser.parse_args()
 
 
