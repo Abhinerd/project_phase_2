@@ -6,6 +6,8 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Any, Iterable
+import random
+from datetime import datetime
 
 import torch
 from PIL import Image
@@ -54,6 +56,10 @@ def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str)
     # THEN APPLY LIMIT
     if limit is not None and limit > 0:
         raw = raw[:limit]
+    
+    # Randomize the order of records to avoid any bias in evaluation
+    random.seed(int(datetime.now().timestamp()))
+    random.shuffle(raw)
 
     records: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
