@@ -46,9 +46,8 @@ def move_to_model_device(batch, model):
     device = next(model.parameters()).device
     return {name: tensor.to(device) for name, tensor in batch.items()}
 
-
 def evaluate_model(model, processor, records, image_root, allow_missing, device):
-    """Lightweight validation loop for checkpoint selection."""
+    """Lightweight validation loop that mirrors final evaluation exactly."""
     import torch
     from PIL import Image
     from src.data.vizwiz import build_conversation
@@ -59,15 +58,17 @@ def evaluate_model(model, processor, records, image_root, allow_missing, device)
     
     with torch.inference_mode():
         for item in tqdm(records, desc="Validation"):
+            # 1. Image loading
+            img_path = Path(image_root) / item["image"]
             try:
-                img_path = Path(image_root) / item["image"]
                 image = Image.open(img_path).convert("RGB")
-                image.thumbnail((1440, 1440), Image.LANCZOS)  # Let processor handle dynamic resolution
-            except Exception:
+                image.thumbnail((1440, 1440), Image.LANCZOS) 
+            except (FileNotFoundError, OSError) as exc:
                 if not allow_missing:
-                    continue
+                    raise FileNotFoundError(f"Cannot load {img_path}") from exc
                 image = Image.new("RGB", (448, 448), color=(0, 0, 0))
                 
+            # 2. Generation logic
             conv = build_conversation(item["question"], target=None)
             prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
@@ -76,13 +77,13 @@ def evaluate_model(model, processor, records, image_root, allow_missing, device)
             input_length = inputs["input_ids"].shape[-1]
             pred = processor.decode(generated[0][input_length:], skip_special_tokens=True).strip()
             
+            # 3. Metric calculation
             ans = vizwiz_ans(pred, item["answers"])
             results.append({"ans": ans, "prediction": pred, "answer_type": item.get("answer_type", "other")})
             
     model.train()
     mean_ans = sum(r["ans"] for r in results) / len(results) if results else 0.0
     return mean_ans
-
 
 def main() -> None:
     args = arguments()
