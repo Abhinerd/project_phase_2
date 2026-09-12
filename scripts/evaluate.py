@@ -27,6 +27,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--split", default="test", choices=["train", "val", "test", "all"])
     parser.add_argument("--max-samples", type=int, default=-1)
     parser.add_argument("--allow-missing-images", action="store_true")
+    parser.add_argument("--use-4bit", action="store_true", help="Load base model in 4-bit (must match training).")
     parser.add_argument("--fp16", action="store_true")
     return parser.parse_args()
 
@@ -63,7 +64,7 @@ def main() -> None:
         raise ValueError(f"No records found for split '{args.split}'.")
 
     model, processor, _ = load_quantized_vlm(
-        QLoRASettings(args.model_id, use_bf16=not args.fp16),
+        QLoRASettings(args.model_id, use_4bit=args.use_4bit, use_bf16=not args.fp16),
         adapter_path=str(args.adapter_path),
         trainable=False
     )
