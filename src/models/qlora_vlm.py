@@ -27,6 +27,9 @@ def load_quantized_vlm(
         processor = AutoProcessor.from_pretrained(
             adapter_path if adapter_path and Path(adapter_path).exists() else settings.model_id,
             trust_remote_code=settings.trust_remote_code,
+            # Dynamic resolution precautions for Qwen2-VL (patch size is 28x28)
+            min_pixels=256 * 28 * 28,     # ~200k pixels. Prevents tiny images from being too blurry.
+            max_pixels=2560 * 28 * 28,    # ~2M pixels. 
         )
         pbar.update(1)
 
