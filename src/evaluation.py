@@ -30,12 +30,19 @@ def infer_answer_type(prediction: str) -> str:
     pred_clean = normalize_answer(prediction)
     if not pred_clean:
         return "unanswerable"
-    if pred_clean in ["yes", "no"]:
+    
+    # English + Hindi Yes/No
+    if pred_clean in ["yes", "no", "हां", "हाँ", "नहीं"]:
         return "yes/no"
-    if pred_clean in ["unanswerable", "unanswerable.", "unanswerable?", "नहीं", "बिना-जवाब"]:
+    
+    # English + Hindi Unanswerable
+    if pred_clean in ["unanswerable", "unanswerable.", "unanswerable?", "बिना-जवाब", "जवाब नहीं", "उत्तर नहीं"]:
         return "unanswerable"
-    if re.match(r"^[0-9]+$", pred_clean):
+        
+    # English + Hindi Numbers (0-9 and ०-९)
+    if re.match(r"^[0-9०-९]+$", pred_clean):
         return "number"
+        
     return "other"
 
 
