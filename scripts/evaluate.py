@@ -45,7 +45,7 @@ def evaluate_model(model, processor, records, image_root, allow_missing, device)
             img_path = Path(image_root) / item["image"]
             try:
                 image = Image.open(img_path).convert("RGB")
-                image.thumbnail((1440, 1440), Image.LANCZOS) 
+                image.thumbnail((448, 448), Image.LANCZOS) 
             except (FileNotFoundError, OSError) as exc:
                 if not allow_missing:
                     raise FileNotFoundError(f"Cannot load {img_path}") from exc

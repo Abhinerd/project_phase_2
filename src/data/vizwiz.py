@@ -89,7 +89,7 @@ class VizWizHindiDataset(Dataset):
         path = self.image_root / item["image"]
         try:
             image = Image.open(path).convert("RGB")
-            image.thumbnail((1440, 1440), Image.LANCZOS)
+            image.thumbnail((448, 448), Image.LANCZOS)
         except (FileNotFoundError, OSError) as exc:
             if not self.allow_missing_images:
                 raise FileNotFoundError(
