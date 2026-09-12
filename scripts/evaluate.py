@@ -9,9 +9,6 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 
-import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -32,23 +29,49 @@ def arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_image(path: Path, allow_missing: bool):
+def evaluate_model(model, processor, records, image_root, allow_missing, device):
+    """Exact same loop used in validation to ensure 1:1 parity."""
+    import torch
     from PIL import Image
-    try:
-        img = Image.open(path).convert("RGB")
-        img.thumbnail((1440, 1440), Image.LANCZOS)  # Let processor handle dynamic resolution
-        return img
-    except (FileNotFoundError, OSError) as exc:
-        if allow_missing:
-            return Image.new("RGB", (448, 448), color=(0, 0, 0))
-        raise FileNotFoundError(f"Cannot load {path}") from exc
+    from src.data.vizwiz import build_conversation
+    from src.evaluation import vizwiz_ans
+    
+    model.eval()
+    results = []
+    
+    with torch.inference_mode():
+        for item in tqdm(records, desc="Evaluating"):
+            # 1. Image loading
+            img_path = Path(image_root) / item["image"]
+            try:
+                image = Image.open(img_path).convert("RGB")
+                image.thumbnail((1440, 1440), Image.LANCZOS) 
+            except (FileNotFoundError, OSError) as exc:
+                if not allow_missing:
+                    raise FileNotFoundError(f"Cannot load {img_path}") from exc
+                image = Image.new("RGB", (448, 448), color=(0, 0, 0))
+                
+            # 2. Generation logic
+            conv = build_conversation(item["question"], target=None)
+            prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
+            inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
+            
+            generated = model.generate(**inputs, max_new_tokens=20, do_sample=False)
+            input_length = inputs["input_ids"].shape[-1]
+            pred = processor.decode(generated[0][input_length:], skip_special_tokens=True).strip()
+            
+            # 3. Metric calculation
+            ans = vizwiz_ans(pred, item["answers"])
+            results.append({"ans": ans, "prediction": pred, "answer_type": item.get("answer_type", "other")})
+            
+    return results
 
 
 def main() -> None:
     args = arguments()
     import torch
-    from src.data.vizwiz import build_conversation, prepare_records
-    from src.evaluation import vizwiz_ans, compute_all_metrics
+    from src.data.vizwiz import prepare_records
+    from src.evaluation import compute_all_metrics
     from src.models.qlora_vlm import QLoRASettings, load_quantized_vlm
 
     started = time.perf_counter()
@@ -68,27 +91,11 @@ def main() -> None:
         adapter_path=str(args.adapter_path),
         trainable=False
     )
-    model.eval()
+    
     device = next(model.parameters()).device
-    results = []
-
-    with torch.inference_mode():
-        for item in tqdm(records, desc="Evaluating"):
-            image = load_image(args.image_root / item["image"], args.allow_missing_images)
-            conv = build_conversation(item["question"], target=None)
-            prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
-            inputs = processor(text=prompt, images=image, return_tensors="pt").to(device)
-
-            generated = model.generate(**inputs, max_new_tokens=20, do_sample=False)
-            input_length = inputs["input_ids"].shape[-1]
-            prediction = processor.decode(generated[0][input_length:], skip_special_tokens=True).strip()
-            
-            results.append({
-                "prediction": prediction,
-                "references": item["answers"],
-                "ans": vizwiz_ans(prediction, item["answers"]),
-                "answer_type": item.get("answer_type", "other")
-            })
+    
+    # Call the unified evaluation function
+    results = evaluate_model(model, processor, records, args.image_root, args.allow_missing_images, device)
 
     # Compute all metrics
     metrics = compute_all_metrics(results)
