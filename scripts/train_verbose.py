@@ -62,7 +62,7 @@ def evaluate_model(model, processor, records, image_root, allow_missing, device)
             try:
                 img_path = Path(image_root) / item["image"]
                 image = Image.open(img_path).convert("RGB")
-                image.thumbnail((448, 448), Image.LANCZOS)
+                image.thumbnail((1440, 1440), Image.LANCZOS)  # Let processor handle dynamic resolution
             except Exception:
                 if not allow_missing:
                     continue
