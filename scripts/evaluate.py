@@ -7,6 +7,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -69,7 +70,7 @@ def main() -> None:
     results = []
 
     with torch.inference_mode():
-        for item in records:
+        for item in tqdm(records, desc="Evaluation"):
             image = load_image(args.image_root / item["image"], args.allow_missing_images)
             conv = build_conversation(item["question"], target=None)
             prompt = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=True)
