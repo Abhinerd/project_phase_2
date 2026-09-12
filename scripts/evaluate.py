@@ -113,13 +113,13 @@ def main() -> None:
     eval_file = args.output_dir / "final_evaluation.json"
     eval_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"\nEVALUATION COMPLETE ({args.split})")
-    print(f"Samples: {len(results)}")
-    print(f"Overall ANS: {metrics['overall_ans']:.4f}")
-    print(f"Type Accuracy: {metrics['type_accuracy']:.4f}")
-    print(f"Macro F1: {metrics['type_macro_f1']:.4f}")
-    print(f"Latency (ms/query): {latency_per_query_ms:.2f}")
-    print(f"Peak VRAM (GiB): {peak_vram_gib:.3f}")
+    tqdm.write(f"\nEVALUATION COMPLETE ({args.split})")
+    tqdm.write(f"Samples: {len(results)}")
+    tqdm.write(f"Overall ANS: {metrics['overall_ans']:.4f}")
+    tqdm.write(f"Type Accuracy: {metrics['type_accuracy']:.4f}")
+    tqdm.write(f"Macro F1: {metrics['type_macro_f1']:.4f}")
+    tqdm.write(f"Latency (ms/query): {latency_per_query_ms:.2f}")
+    tqdm.write(f"Peak VRAM (GiB): {peak_vram_gib:.3f}")
 
 if __name__ == "__main__":
     main()

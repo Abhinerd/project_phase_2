@@ -39,7 +39,7 @@ def arguments() -> argparse.Namespace:
 
 
 def print_section(title: str) -> None:
-    print(f"\n{'=' * 65}\n{title.upper()}\n{'=' * 65}")
+    tqdm.write(f"\n{'=' * 65}\n{title.upper()}\n{'=' * 65}")
 
 
 def move_to_model_device(batch, model):
@@ -134,7 +134,7 @@ def main() -> None:
     started = time.perf_counter()
 
     for epoch in range(args.num_train_epochs):
-        print(f"--- Epoch {epoch + 1}/{args.num_train_epochs} ---")
+        tqdm.write(f"--- Epoch {epoch + 1}/{args.num_train_epochs} ---")
         for batch_index, batch in enumerate(tqdm(loader, desc=f"Epoch {epoch + 1}/{args.num_train_epochs}")):
             batch = move_to_model_device(batch, model)
             with torch.autocast("cuda", dtype=compute_dtype):
@@ -148,19 +148,19 @@ def main() -> None:
                 step += 1
                 step_loss = loss.item() * args.gradient_accumulation_steps
                 losses.append(step_loss)
-                print(f"[STEP {step}/{args.max_train_steps}] Loss: {step_loss:.4f}")
+                # tqdm.write(f"[STEP {step}/{args.max_train_steps}] Loss: {step_loss:.4f}")
                 
                 if step >= args.max_train_steps:
                     break
                     
         # --- VALIDATION & CHECKPOINTING ---
-        print("Running validation...")
+        tqdm.write("Running validation...")
         val_ans = evaluate_model(model, processor, val_records, args.image_root, args.allow_missing_images, next(model.parameters()).device)
-        print(f"Epoch {epoch+1} Validation ANS: {val_ans:.4f}")
+        tqdm.write(f"Epoch {epoch+1} Validation ANS: {val_ans:.4f}")
         
         if val_ans > best_val_ans:
             best_val_ans = val_ans
-            print(f"New best score! Saving adapter to {args.output_dir}")
+            tqdm.write(f"New best score! Saving adapter to {args.output_dir}")
             args.output_dir.mkdir(parents=True, exist_ok=True)
             model.save_pretrained(args.output_dir)
             processor.save_pretrained(args.output_dir)
@@ -182,8 +182,8 @@ def main() -> None:
     }
     (args.output_dir / "training_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print_section("Training Complete")
-    print(f"Best Validation ANS: {best_val_ans:.4f}")
-    print(f"Peak VRAM: {peak_vram_gib} GiB")
+    tqdm.write(f"Best Validation ANS: {best_val_ans:.4f}")
+    tqdm.write(f"Peak VRAM: {peak_vram_gib} GiB")
 
 if __name__ == "__main__":
     main()
