@@ -28,7 +28,6 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=-1)
     parser.add_argument("--allow-missing-images", action="store_true")
     parser.add_argument("--fp16", action="store_true")
-    parser.add_argument("--num-eval-samples", type=int, default=-1)
     return parser.parse_args()
 
 
@@ -55,7 +54,7 @@ def main() -> None:
     torch.cuda.reset_peak_memory_stats()
 
     # Load split-aware records
-    records = prepare_records(args.dataset, args.cache_dir, args.num_eval_samples, "test")
+    records = prepare_records(args.dataset, args.cache_dir, args.max_samples, "test")
     
     if args.max_samples > 0:
         records = records[: args.max_samples]
