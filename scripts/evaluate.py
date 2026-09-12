@@ -36,7 +36,7 @@ def load_image(path: Path, allow_missing: bool):
     from PIL import Image
     try:
         img = Image.open(path).convert("RGB")
-        img.thumbnail((448, 448), Image.LANCZOS)
+        img.thumbnail((1440, 1440), Image.LANCZOS)  # Let processor handle dynamic resolution
         return img
     except (FileNotFoundError, OSError) as exc:
         if allow_missing:
