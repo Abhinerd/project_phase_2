@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import hashlib
 from pathlib import Path
 from typing import Any, Iterable
@@ -51,10 +52,12 @@ def prepare_records(dataset_path: Path, cache_dir: Path, limit: int, split: str)
     if split != "all":
         raw = [item for item in raw if item.get("split") == split]
     
-    # THEN APPLY LIMIT
+    # THEN APPLY LIMIT AND SHUFFLE
     if limit is not None and limit > 0:
-        raw = raw[:limit]
-
+        raw = random.sample(raw, k=limit)
+    else:
+        random.shuffle(raw)
+        
     records: list[dict[str, Any]] = []
     for index, item in enumerate(raw):
         target, answers = choose_target(item)
