@@ -86,8 +86,7 @@ class VizWizHindiDataset(Dataset):
         path = self.image_root / item["image"]
         try:
             image = Image.open(path).convert("RGB")
-            max_size = 448  # Increased to 448 for better VLM accuracy
-            image.thumbnail((max_size, max_size), Image.LANCZOS)
+            image.thumbnail((1440, 1440), Image.LANCZOS)
         except (FileNotFoundError, OSError) as exc:
             if not self.allow_missing_images:
                 raise FileNotFoundError(
