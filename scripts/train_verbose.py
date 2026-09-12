@@ -7,6 +7,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -57,7 +58,7 @@ def evaluate_model(model, processor, records, image_root, allow_missing, device)
     results = []
     
     with torch.inference_mode():
-        for item in records:
+        for item in tqdm(records, desc="Validation"):
             try:
                 img_path = Path(image_root) / item["image"]
                 image = Image.open(img_path).convert("RGB")
@@ -134,7 +135,7 @@ def main() -> None:
 
     for epoch in range(args.num_train_epochs):
         print(f"--- Epoch {epoch + 1}/{args.num_train_epochs} ---")
-        for batch_index, batch in enumerate(loader):
+        for batch_index, batch in enumerate(tqdm(loader, desc=f"Epoch {epoch + 1}/{args.num_train_epochs}")):
             batch = move_to_model_device(batch, model)
             with torch.autocast("cuda", dtype=compute_dtype):
                 loss = model(**batch).loss / args.gradient_accumulation_steps
@@ -147,7 +148,7 @@ def main() -> None:
                 step += 1
                 step_loss = loss.item() * args.gradient_accumulation_steps
                 losses.append(step_loss)
-                print(f"[STEP {step}/{args.max_train_steps}] Loss: {step_loss:.4f}")
+                # print(f"[STEP {step}/{args.max_train_steps}] Loss: {step_loss:.4f}")
                 
                 if step >= args.max_train_steps:
                     break
